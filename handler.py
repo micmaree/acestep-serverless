@@ -62,8 +62,31 @@ def _wait_ready(timeout_sec: int = 600) -> None:
     raise RuntimeError(f"sidecar did not come up in {timeout_sec}s")
 
 
+def _dump_volume_layout() -> None:
+    """Log what's actually mounted on this worker so we can debug volume
+    mount issues. Prints to stdout (captured by RunPod worker logs)."""
+    import os
+    print("[handler] === VOLUME LAYOUT DEBUG ===", flush=True)
+    print(f"[handler] ACESTEP_CHECKPOINT_DIR={os.environ.get('ACESTEP_CHECKPOINT_DIR','NOT_SET')}",
+          flush=True)
+    for path in ("/runpod-volume", "/workspace", "/runpod-volume/models",
+                  "/runpod-volume/models/acestep",
+                  "/workspace/models/acestep"):
+        try:
+            if os.path.exists(path):
+                entries = sorted(os.listdir(path))[:20]
+                print(f"[handler] {path}/ ({len(entries)} entries): {entries}",
+                      flush=True)
+            else:
+                print(f"[handler] {path}/ — DOES NOT EXIST", flush=True)
+        except Exception as exc:
+            print(f"[handler] {path}/ — ERROR: {exc}", flush=True)
+    print("[handler] === END DEBUG ===", flush=True)
+
+
 # Boot at module load — RunPod imports this module once per worker process,
 # so the sidecar lives across many handler() invocations.
+_dump_volume_layout()
 _SIDECAR = _start_sidecar()
 _wait_ready()
 

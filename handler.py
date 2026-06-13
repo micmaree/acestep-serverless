@@ -62,31 +62,53 @@ def _wait_ready(timeout_sec: int = 600) -> None:
     raise RuntimeError(f"sidecar did not come up in {timeout_sec}s")
 
 
-def _dump_volume_layout() -> None:
-    """Log what's actually mounted on this worker so we can debug volume
-    mount issues. Prints to stdout (captured by RunPod worker logs)."""
+def _wire_checkpoints_dir() -> None:
+    """ace-step looks for models at <project_root>/checkpoints/. project_root
+    defaults to cwd which is /app (set by WORKDIR in Dockerfile). Volume
+    models live at /runpod-volume/models/acestep/. Symlink them so ace-step
+    finds the pre-downloaded files instead of trying to re-download (which
+    fails — RunPod->HF bandwidth is throttled to KB/s)."""
     import os
     print("[handler] === VOLUME LAYOUT DEBUG ===", flush=True)
-    print(f"[handler] ACESTEP_CHECKPOINT_DIR={os.environ.get('ACESTEP_CHECKPOINT_DIR','NOT_SET')}",
-          flush=True)
-    for path in ("/runpod-volume", "/workspace", "/runpod-volume/models",
+    for path in ("/runpod-volume", "/runpod-volume/models",
                   "/runpod-volume/models/acestep",
-                  "/workspace/models/acestep"):
+                  "/app", "/app/checkpoints"):
         try:
             if os.path.exists(path):
-                entries = sorted(os.listdir(path))[:20]
+                entries = sorted(os.listdir(path))[:15]
                 print(f"[handler] {path}/ ({len(entries)} entries): {entries}",
                       flush=True)
             else:
                 print(f"[handler] {path}/ — DOES NOT EXIST", flush=True)
         except Exception as exc:
             print(f"[handler] {path}/ — ERROR: {exc}", flush=True)
+
+    src = "/runpod-volume/models/acestep"
+    dst = "/app/checkpoints"
+    if os.path.exists(src):
+        if os.path.lexists(dst):
+            print(f"[handler] {dst} already exists, removing", flush=True)
+            try:
+                if os.path.islink(dst): os.unlink(dst)
+                else: import shutil; shutil.rmtree(dst)
+            except Exception as exc:
+                print(f"[handler] rm {dst} failed: {exc}", flush=True)
+        try:
+            os.symlink(src, dst)
+            print(f"[handler] ✓ symlinked {dst} → {src}", flush=True)
+            print(f"[handler] checkpoint dir entries: {sorted(os.listdir(dst))[:15]}",
+                  flush=True)
+        except Exception as exc:
+            print(f"[handler] symlink failed: {exc}", flush=True)
+    else:
+        print(f"[handler] ⚠ {src} not found — sidecar will try to download (slow!)",
+              flush=True)
     print("[handler] === END DEBUG ===", flush=True)
 
 
 # Boot at module load — RunPod imports this module once per worker process,
 # so the sidecar lives across many handler() invocations.
-_dump_volume_layout()
+_wire_checkpoints_dir()
 _SIDECAR = _start_sidecar()
 _wait_ready()
 
